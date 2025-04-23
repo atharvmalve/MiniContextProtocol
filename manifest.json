@@ -1,0 +1,15 @@
+{
+    "tools": [
+      {
+        "name": "greet",
+        "description": "Greets a user by name.",
+        "params_schema": "./schemas/greet.schema.json"
+      },
+      {
+        "name": "add",
+        "description": "Adds two numbers",
+        "params_schema": "./schemas/add.schema.json"
+      }
+    ]
+  }
+  
