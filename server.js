@@ -1,83 +1,108 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 const Ajv = require('ajv');
-const greet = require('./tools/greet');
-const add = require('./tools/add');
+const { loadTools } = require('./utils/loadTools');
+
+
 
 const app = express();
+const ajv = new Ajv();
 app.use(express.json());
 
-const ajv = new Ajv();
+let tools = {};
+let schemas = {};
 
-// Load manifest
-const manifest = JSON.parse(fs.readFileSync('./manifest.json', 'utf-8'));
+async function init() {
+  const loaded = await loadTools();
+  tools = loaded.tools;
+  schemas = loaded.schemas;
+}
 
-// Map of tool handlers and schemas
-const tools = {
-  greet: {
-    handler: greet,
-    schema: JSON.parse(fs.readFileSync('./schemas/greet.schema.json', 'utf-8'))
-  },
-  add:{
-    handler: add,
-    schema: JSON.parse(fs.readFileSync('./schemas/add.schema.json', 'utf-8'))
-  }
-};
 
-// JSON-RPC handler
-app.post('/rpc', (req, res) => {
+
+app.post('/rpc', async (req, res) => {
   const { jsonrpc, method, params, id } = req.body;
 
-  if (jsonrpc !== '2.0' || !method) {
-    return res.json({
-      jsonrpc: '2.0',
-      error: { code: -32600, message: 'Invalid Request' },
-      id: id || null
-    });
+  if (jsonrpc !== '2.0') {
+    return res.json({ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid JSON-RPC version' }, id });
   }
 
+  // 🛠 Check if the method is "chain" FIRST
+  if (method === "chain") {
+    let prevResult = null;
+
+    for (const step of params) {
+      const stepMethod = step.method;
+      let stepParams = step.params;
+
+      // Replace "$prev" if needed
+      stepParams = JSON.parse(JSON.stringify(stepParams).replace(/\$prev/g, prevResult));
+
+      const validate = ajv.compile(schemas[stepMethod]);
+      const valid = validate(stepParams);
+
+      if (!valid) {
+        return res.json({
+          jsonrpc: "2.0",
+          error: { code: -32602, message: "Invalid params in chain", data: validate.errors },
+          id,
+        });
+      }
+
+      prevResult = await tools[stepMethod](stepParams);
+    }
+
+    // Set the final result from the last tool execution (prevResult)
+    return res.set('Content-Type', 'application/json').send(
+      JSON.stringify({ jsonrpc: '2.0', result: prevResult, id }, null, 2)
+    );
+  }
+
+  // 🛠 Now normal RPC tools
   const tool = tools[method];
   if (!tool) {
-    return res.json({
-      jsonrpc: '2.0',
-      error: { code: -32601, message: 'Method not found' },
-      id
-    });
+    return res.json({ jsonrpc: '2.0', error: { code: -32601, message: 'Method not found' }, id });
   }
 
-  const valid = ajv.validate(tool.schema, params);
+  const validate = ajv.compile(schemas[method]);
+  const valid = validate(params);
+
   if (!valid) {
-    return res.json({
-      jsonrpc: '2.0',
-      error: { code: -32602, message: 'Invalid params', data: ajv.errors },
-      id
-    });
+    return res.json({ jsonrpc: '2.0', error: { code: -32602, message: 'Invalid params', data: validate.errors }, id });
   }
 
-  // Handle notification (no response)
-  if (id === undefined) {
-    tool.handler(params);
-    return res.status(204).end(); // No Content
-  }
-
-  // Handle request
   try {
-    const result = tool.handler(params);
-    return res.json({
-      jsonrpc: '2.0',
-      result,
-      id
-    });
+    const result = await tool(params);
+    return res.json({ jsonrpc: '2.0', result, id });
   } catch (err) {
-    return res.json({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Server error', data: err.message },
-      id
-    });
+    return res.json({ jsonrpc: '2.0', error: { code: -32000, message: err.message }, id });
   }
 });
 
-app.listen(3000, () => {
-  console.log('Mini-CP running on http://localhost:3000');
+
+
+app.get('/v1/manifest', (req, res) => {
+  const manifest = {
+    name: "Mini Context Protocol Server",
+    version: "1.0.0",
+    description: "A mini version of MCP built for learning and fun!",
+    tools: Object.keys(tools).map(toolName => ({
+      name: toolName,
+      description: schemas[toolName]?.description || "No description provided",
+      version: "1.0.0" // (or read from manifest.json in future)
+    }))
+  };
+
+  res.json(manifest);
+});
+
+
+
+
+
+
+
+init().then(() => {
+  app.listen(3000, () => {
+    console.log('🚀 Mini-CP Server running on http://localhost:3000');
+  });
 });

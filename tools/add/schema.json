@@ -1,0 +1,16 @@
+{
+    "type": "object",
+  "properties": {
+    "a": {
+      "type": "number",
+      "description": "The first number to add"
+    },
+    "b": {
+      "type": "number",
+      "description": "The second number to add"
+    }
+  },
+  "description": "Adds two numbers",
+  "required": ["a", "b"]
+  }
+  
